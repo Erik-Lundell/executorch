@@ -357,6 +357,7 @@ Error platform_execute(
   std::vector<char*> linux_output_ptrs(output_count, nullptr);
   std::vector<std::vector<char>> output_scratch_buffers(output_count);
   std::vector<bool> output_needs_adjustment(output_count, false);
+  const size_t output_arg_start = args.size() - output_count;
 
   for (int i = 0; i < input_count; ++i) {
     auto tensor_in = args[i]->toTensor();
@@ -367,7 +368,7 @@ Error platform_execute(
   if (handles.outputs != nullptr) {
     for (int i = 0; i < output_count; ++i) {
       int tensor_count = 1, io_count = 1;
-      auto tensor_out = args[input_count + i]->toTensor();
+      auto tensor_out = args[output_arg_start + i]->toTensor();
       calculate_dimensions(
           tensor_out, &handles.outputs->io[i], &tensor_count, &io_count);
       if (i < static_cast<int>(output_io_bytes.size())) {
@@ -407,7 +408,7 @@ Error platform_execute(
       if (!output_needs_adjustment[i]) {
         continue;
       }
-      auto tensor_out = args[input_count + i]->toTensor();
+      auto tensor_out = args[output_arg_start + i]->toTensor();
       const size_t tensor_nbytes = tensor_out.nbytes();
       Error adjust_status = copy_with_layout_adjustment(
           handles.outputs->io[i],

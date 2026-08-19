@@ -128,13 +128,13 @@ Error platform_execute(
 
   size_t tensor_bytes_total = 0;
   size_t io_bytes_total = 0;
+  const size_t output_arg_start = args.size() - output_count;
   // Write outputs from scratch into EValue pointers
   for (int i = 0; i < output_count; i++) {
     int tensor_count = 1, io_count = 1;
     const char* output_addr = ethosu_scratch + handles.outputs->io[i].offset;
-    // Process input EValue into scratch
-    // Outputs are in the index immediately after inputs
-    auto tensor_out = args[input_count + i]->toTensor();
+    // Outputs are the last output_count delegate arguments.
+    auto tensor_out = args[output_arg_start + i]->toTensor();
 
     calculate_dimensions(
         tensor_out, &handles.outputs->io[i], &tensor_count, &io_count);

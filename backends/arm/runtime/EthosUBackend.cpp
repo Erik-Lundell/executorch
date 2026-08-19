@@ -53,6 +53,10 @@ namespace executorch {
 namespace backends {
 namespace arm {
 
+namespace {
+constexpr size_t kEthosUScratchAlignmentRequirement = 16;
+} // namespace
+
 extern "C" {
 void __attribute__((weak)) EthosUBackend_execute_begin() {}
 void __attribute__((weak)) EthosUBackend_execute_end() {}
@@ -69,6 +73,71 @@ class EthosUBackendExecuteCallbacks {
     EthosUBackend_execute_end();
   }
 };
+
+/**
+ * Returns the planned Ethos-U scratch argument when present, otherwise
+ * allocates scratch when the platform backend needs it.
+ */
+Result<char*> get_ethosu_scratch(
+    BackendExecutionContext& context,
+    const VelaHandles& handles,
+    int input_count,
+    int output_count,
+    Span<EValue*> args) {
+  const size_t expected_args_without_scratch =
+      static_cast<size_t>(input_count + output_count);
+
+  // Detect whether scratch was provided as argument.
+  if (args.size() == expected_args_without_scratch + 1 &&
+      handles.scratch_data_size > 0 && args[input_count]->isTensor()) {
+    auto scratch_tensor = args[input_count]->toTensor();
+
+    // Validate provided scratch is big enough.
+    if (scratch_tensor.nbytes() < handles.scratch_data_size) {
+      ET_LOG(
+          Error,
+          "Ethos-U scratch tensor is too small: %zu bytes, expected at least %zu bytes",
+          scratch_tensor.nbytes(),
+          handles.scratch_data_size);
+      return Error::InvalidProgram;
+    }
+
+    // Validate provided scratch is aligned.
+    char* scratch = scratch_tensor.mutable_data_ptr<char>();
+    if (reinterpret_cast<uintptr_t>(scratch) %
+            kEthosUScratchAlignmentRequirement !=
+        0) {
+      ET_LOG(
+          Error,
+          "Ethos-U scratch tensor must be %zu-byte aligned, got %p",
+          kEthosUScratchAlignmentRequirement,
+          static_cast<void*>(scratch));
+      return Error::InvalidProgram;
+    }
+    return scratch;
+  }
+
+  if (!needs_scratch_allocation()) {
+    return nullptr;
+  }
+
+  // Use a temporary allocator for the intermediate tensors of the
+  // computation. The allocator is released in runtime/executor/method.cpp
+  // at the end of the execution of the Ethos-U custom delegate. Ethos-U
+  // driver requires 16-byte alignment.
+  MemoryAllocator* temp_allocator = context.get_temp_allocator();
+  char* ethosu_scratch = static_cast<char*>(temp_allocator->allocate(
+      handles.scratch_data_size, kEthosUScratchAlignmentRequirement));
+  if (ethosu_scratch == nullptr) {
+    ET_LOG(
+        Error,
+        "Failed to allocate scratch buffer of %zu bytes from temp_allocator",
+        handles.scratch_data_size);
+    return Error::MemoryAllocationFailed;
+  }
+
+  return ethosu_scratch;
+}
 
 class EthosUBackend final : public ::executorch::runtime::BackendInterface {
  public:
@@ -161,23 +230,12 @@ class EthosUBackend final : public ::executorch::runtime::BackendInterface {
     const int input_count = handles.inputs ? handles.inputs->count : 0;
     const int output_count = handles.outputs ? handles.outputs->count : 0;
 
-    char* ethosu_scratch = nullptr;
-    if (needs_scratch_allocation()) {
-      MemoryAllocator* temp_allocator = context.get_temp_allocator();
-      // Use a temporary allocator for the intermediate tensors of the
-      // computation. The allocator is released in runtime/executor/method.cpp
-      // at the end of the execution of the Ethos-U custom delegate. Ethos-U
-      // driver requires 16 bit alignment.
-      ethosu_scratch = static_cast<char*>(
-          temp_allocator->allocate(handles.scratch_data_size, 16UL));
-      if (ethosu_scratch == nullptr) {
-        ET_LOG(
-            Error,
-            "Failed to allocate scratch buffer of %zu bytes from temp_allocator",
-            handles.scratch_data_size);
-        return Error::MemoryAllocationFailed;
-      }
+    Result<char*> scratch_result =
+        get_ethosu_scratch(context, handles, input_count, output_count, args);
+    if (!scratch_result.ok()) {
+      return scratch_result.error();
     }
+    char* ethosu_scratch = scratch_result.get();
 
     ET_LOG(
         Debug,

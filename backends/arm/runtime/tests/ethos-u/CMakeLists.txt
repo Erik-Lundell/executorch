@@ -98,3 +98,14 @@ set_tests_properties(
   PROPERTIES LABELS "arm;ethos-u;runtime;memory_allocation;fvp" RESOURCE_LOCK
              arm_ethos_u_runtime
 )
+
+add_test(
+  NAME ethosu_scratch_to_executorch
+  COMMAND "${_ethos_u_runtime_tests_dir}/test_ethosu_scratch_to_executorch.sh"
+          "${EXECUTORCH_ROOT}" "${_ethos_u_runtime_test_output_dir}"
+)
+set_tests_properties(
+  ethosu_scratch_to_executorch
+  PROPERTIES LABELS "arm;ethos-u;runtime;memory_allocation;fvp" RESOURCE_LOCK
+             arm_ethos_u_runtime
+)
